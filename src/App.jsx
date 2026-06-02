@@ -29,7 +29,7 @@ const stor = {
 
 function extractJSON(raw) {
   if (!raw) throw new Error("Pusta odpowiedź");
-  let s = raw.replace(/^```json\s*/i, "").replace(/^```\s*/m, "").replace(/```\s*$/m, "").trim();
+  let s = raw.replace(/`{3}json/gi, "").replace(/`{3}/g, "").trim();
 
   try { return JSON.parse(s); } catch {}
 
