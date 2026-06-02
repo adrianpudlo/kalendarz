@@ -65,22 +65,23 @@ function extractJSON(raw) {
   }
   if (objects.length > 0) return { events: objects };
 
-  const preview = raw.slice(0, 400).replace(/</g,"&lt;");
-  console.error("RAW RESPONSE:", raw.slice(0, 1000));
-  throw new Error("PARSE_FAILED:" + raw.slice(0, 300));
+  console.error("RAW RESPONSE (first 800 chars):", raw.slice(0, 800));
+  throw new Error("Błąd parsowania JSON. Odpowiedź modelu: " + raw.slice(0, 120));
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
 async function callClaude(messages, opts = {}) {
+  const body = {
+    model: "claude-sonnet-4-6",
+    max_tokens: opts.max_tokens || 8000,
+    messages,
+  };
+  if (opts.system) body.system = opts.system;
   const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: opts.max_tokens || 8000,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -125,19 +126,18 @@ async function fetchEvents(year, month) {
   const days = new Date(year, month, 0).getDate();
   const prompt = buildPrompt(MONTHS_PL[month-1], year, days);
 
-  // Try up to 2 times — second attempt uses a stricter "JSON only" reminder
   let text, parsed;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const messages = attempt === 1
-      ? [{ role:"user", content: prompt }]
-      : [
-          { role:"user", content: prompt },
-          { role:"assistant", content: "Rozumiem. Oto dane w formacie JSON:" },
-        ];
-    text = await callClaude(messages, { max_tokens: 7000 });
+    text = await callClaude(
+      [{ role:"user", content: prompt }],
+      {
+        max_tokens: 7000,
+        system: "Odpowiadasz WYŁĄCZNIE poprawnym JSON. Zero tekstu przed JSON ani po nim. Zero markdown. Żadnych wstępów ani komentarzy. Tylko surowy JSON zaczynający się od { i kończący na }.",
+      }
+    );
     try {
       parsed = extractJSON(text);
-      break; // success
+      break;
     } catch(e) {
       if (attempt === 2) throw e;
       console.warn("Attempt 1 parse failed, retrying…");
@@ -192,10 +192,7 @@ export default function App() {
       setMeta({...m}); setEvents(evs);
     } catch(e) {
       console.error(e);
-      const msg = e.message.startsWith("PARSE_FAILED:")
-        ? "Model zwrócił nieprawidłowy format. Surowa odpowiedź:\n" + e.message.slice(13)
-        : e.message;
-      setLoadErr(msg);
+      setLoadErr(`Błąd: ${e.message}`);
     }
     setLoading(false);
   }, [ym, year, month]);
