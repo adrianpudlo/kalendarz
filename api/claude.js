@@ -5,12 +5,13 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in environment variables" });
+    return res.status(500).json({ error: "Brak ANTHROPIC_API_KEY w zmiennych środowiskowych Vercel" });
   }
 
   try {
-    // Only add web-search beta header when request actually uses web_search tool
     const body = req.body;
+
+    // Only add web-search beta when tools include web_search
     const usesWebSearch = Array.isArray(body.tools) &&
       body.tools.some(t => t.type === "web_search_20250305" || t.name === "web_search");
 
@@ -31,14 +32,20 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // Log errors server-side for debugging
     if (!response.ok) {
-      console.error("Anthropic API error:", response.status, JSON.stringify(data));
+      // Return full Anthropic error so we can see it in the browser
+      console.error("Anthropic error:", response.status, JSON.stringify(data));
+      return res.status(response.status).json({
+        error: data?.error?.message || "Anthropic API error",
+        anthropic_type: data?.error?.type,
+        status: response.status,
+        full: data,
+      });
     }
 
-    return res.status(response.status).json(data);
+    return res.status(200).json(data);
   } catch (err) {
-    console.error("Proxy error:", err);
+    console.error("Proxy exception:", err);
     return res.status(500).json({ error: err.message });
   }
 }

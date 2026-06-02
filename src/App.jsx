@@ -55,13 +55,17 @@ async function callClaude(messages, opts = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5",
+      model: "claude-sonnet-4-6",
       max_tokens: opts.max_tokens || 8000,
       messages,
       ...(opts.tools ? { tools: opts.tools, tool_choice: { type: "auto" } } : {}),
     }),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    const msg = errData?.error || errData?.anthropic_type || `HTTP ${res.status}`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
   const data = await res.json();
   if (data.error) throw new Error(data.error.message || "API error");
   const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
