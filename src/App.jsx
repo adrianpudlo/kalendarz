@@ -86,24 +86,26 @@ async function callClaude(userMessage) {
 function buildPrompt(monthPL, year, days) {
   return `Wygeneruj 80-90 rocznic i wydarzeń na ${monthPL} ${year}.
 
-ZASADY DAT — KRYTYCZNE: Tylko daty co do których jesteś pewny. Jeśli nie znasz dokładnego dnia — pomiń. Nie zgaduj.
+ZASADY DAT — ABSOLUTNIE KRYTYCZNE:
+- Wstawiaj WYŁĄCZNIE daty co do których jesteś w 100% pewny że należą do tego miesiąca.
+- Jeśli masz choćby cień wątpliwości — POMIŃ. Lepiej mniej niż źle.
+- PRZYKŁAD BŁĘDU KTÓREGO NIE WOLNO POPEŁNIĆ: Lech Wałęsa urodził się 29 WRZEŚNIA, nie w czerwcu. Podobnych błędów nie rób.
+- Przed każdym wpisem sprawdź w pamięci: "Czy ten dzień na pewno jest w ${monthPL}?"
+
+TYTUŁ — wyłącznie suchy fakt, zero narracji, zero ocen:
+DOBRZE: "83. urodziny Meryl Streep" / "17. rocznica premiery Ojca Chrzestnego" / "55 lat od lądowania na Księżycu" / "Finał Roland Garros 2026"
+ŹLE: "Meryl Streep: ikona Hollywoodu" / "Ojciec Chrzestny zmienił kino na zawsze" / "Armstrong i skok w nieznane"
+
+SUBTITLE: jedno zdanie — kim jest osoba lub czym było zdarzenie. Bez dramatyzowania.
 
 ZASADY:
-- Tytuł to SUCHY FAKT, nie temat artykułu. Przykłady:
-  "48. urodziny Meryl Streep"
-  "17. rocznica premiery Ojca Chrzestnego"
-  "100. rocznica śmierci Lenina"
-  "Finał NBA 2026"
-  "25 lat od katastrofy Concorde"
-- Subtitle: jedno zdanie — kim jest ta osoba lub czym było to wydarzenie. Bez dramatyzowania.
-- Zmarli: rocznice śmierci (dowolne, szczególnie okrągłe) LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
+- Zmarli: rocznice śmierci (dowolne) LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
 - Żyjący: urodziny jeśli znana postać (min. 40 lat)
-- Min. 5 tematów z każdej kategorii, dzień: 1–${days}
+- Min. 5 z każdej kategorii, dzień: 1–${days}
 - Kategorie: urodziny, smierc, wydarzenie, polska, sport, polityka, wybory, katastrofa, nauka, kultura, ciekawostka
-- Szeroki zakres: politycy, sportowcy, aktorzy, muzycy, pisarze, naukowcy, wynalazcy, przestępcy, ofiary, odkrycia, premiery filmów i albumów, rekordy, pierwsze razy w historii
 
 Format JSON:
-{"events":[{"id":"slug","day":1,"title":"Tytuł — suchy fakt","subtitle":"Kim jest lub czym było","category":"kategoria","anniversary":"50 lat lub null"}]}`;
+{"events":[{"id":"slug","day":1,"title":"Suchy fakt","subtitle":"Kim jest lub czym było","category":"kategoria","anniversary":"50 lat lub null"}]}`;
 }
 
 // ─── FETCH ────────────────────────────────────────────────────────────────────
@@ -202,8 +204,9 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#F8F7F4", color: "#1A1A1A",
-      fontFamily: "Georgia,'Times New Roman',serif", maxWidth: 1200, margin: "0 auto" }}
+      fontFamily: "Georgia,'Times New Roman',serif" }}
       onClick={() => setTooltip(null)}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
 
       {/* HEADER */}
       <header style={{ background: "#fff", borderBottom: "1.5px solid #E5E3DE",
@@ -337,6 +340,7 @@ export default function App() {
 
       {/* TOOLTIP */}
       {tooltip && <Tooltip data={tooltip} onClose={() => setTooltip(null)} />}
+      </div>
     </div>
   );
 }
