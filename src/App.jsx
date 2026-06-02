@@ -29,11 +29,44 @@ const stor = {
 
 function extractJSON(raw) {
   if (!raw) throw new Error("Pusta odpowiedź");
+
+  // 1. Strip markdown fences
   let s = raw.replace(/```json\s*/gi,"").replace(/```\s*/g,"").trim();
+
+  // 2. Direct parse
   try { return JSON.parse(s); } catch {}
+
+  // 3. Find outermost { ... }
   const a = s.indexOf("{"), b = s.lastIndexOf("}");
   if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b+1)); } catch {} }
-  throw new Error("Nie udało się sparsować JSON");
+
+  // 4. Find outermost [ ... ] (if model returned bare array)
+  const c = s.indexOf("["), d = s.lastIndexOf("]");
+  if (c !== -1 && d > c) {
+    try { return { events: JSON.parse(s.slice(c, d+1)) }; } catch {}
+  }
+
+  // 5. Fallback: extract individual {...} objects line by line
+  const objects = [];
+  let depth = 0, buf = "", inObj = false;
+  for (const ch of s) {
+    if (ch === "{") { depth++; inObj = true; }
+    if (inObj) buf += ch;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0 && inObj) {
+        try {
+          const obj = JSON.parse(buf);
+          if (obj.id || obj.title) objects.push(obj);
+        } catch {}
+        buf = ""; inObj = false;
+      }
+    }
+  }
+  if (objects.length > 0) return { events: objects };
+
+  console.error("Raw response that failed parsing:", raw.slice(0, 600));
+  throw new Error("Nie udało się sparsować JSON — sprawdź konsolę");
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────
@@ -89,11 +122,27 @@ Tylko JSON, zero tekstu poza JSON:
 
 async function fetchEvents(year, month) {
   const days = new Date(year, month, 0).getDate();
-  const text = await callClaude(
-    [{ role:"user", content: buildPrompt(MONTHS_PL[month-1], year, days) }],
-    { max_tokens: 7000 }
-  );
-  const parsed = extractJSON(text);
+  const prompt = buildPrompt(MONTHS_PL[month-1], year, days);
+
+  // Try up to 2 times — second attempt uses a stricter "JSON only" reminder
+  let text, parsed;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const messages = attempt === 1
+      ? [{ role:"user", content: prompt }]
+      : [
+          { role:"user", content: prompt },
+          { role:"assistant", content: "Rozumiem. Oto dane w formacie JSON:" },
+        ];
+    text = await callClaude(messages, { max_tokens: 7000 });
+    try {
+      parsed = extractJSON(text);
+      break; // success
+    } catch(e) {
+      if (attempt === 2) throw e;
+      console.warn("Attempt 1 parse failed, retrying…");
+    }
+  }
+
   const evs = parsed.events || parsed;
   if (!Array.isArray(evs) || !evs.length) throw new Error("Pusta lista zdarzeń");
   const maxDay = new Date(year, month, 0).getDate();
