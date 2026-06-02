@@ -65,8 +65,9 @@ function extractJSON(raw) {
   }
   if (objects.length > 0) return { events: objects };
 
-  console.error("Raw response that failed parsing:", raw.slice(0, 600));
-  throw new Error("Nie udało się sparsować JSON — sprawdź konsolę");
+  const preview = raw.slice(0, 400).replace(/</g,"&lt;");
+  console.error("RAW RESPONSE:", raw.slice(0, 1000));
+  throw new Error("PARSE_FAILED:" + raw.slice(0, 300));
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────
@@ -191,7 +192,10 @@ export default function App() {
       setMeta({...m}); setEvents(evs);
     } catch(e) {
       console.error(e);
-      setLoadErr(`Błąd: ${e.message}`);
+      const msg = e.message.startsWith("PARSE_FAILED:")
+        ? "Model zwrócił nieprawidłowy format. Surowa odpowiedź:\n" + e.message.slice(13)
+        : e.message;
+      setLoadErr(msg);
     }
     setLoading(false);
   }, [ym, year, month]);
