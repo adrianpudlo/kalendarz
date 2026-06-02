@@ -64,24 +64,25 @@ function buildPrompt(monthPL, year, days) {
 
 Wygeneruj 60-70 tematów na ${monthPL} ${year}, które mają POTENCJAŁ NA DOBRY ARTYKUŁ dla takiego portalu.
 
-SELEKCJA — bierz tylko tematy gdzie jest:
+ZASADY DAT — KRYTYCZNE: Podawaj TYLKO daty co do których jesteś absolutnie pewny. Jeśli nie pamiętasz dokładnego dnia zdarzenia w tym miesiącu — POMIŃ ten temat, nie zgaduj. Przykład błędu którego NIE wolno popełniać: Wałęsa urodził się 29 września, nie w czerwcu.
+
+SELEKCJA — tylko tematy z potencjałem narracyjnym:
 - dramat, paradoks lub nieoczywista historia
 - coś czego czytelnik nie wiedział
 - postać lub zdarzenie które rezonuje emocjonalnie
-- aktualny pretekst (rocznica, event) do opowiedzenia historii
 
 ZASADY:
-- Zmarli: rocznice śmierci (dowolne) LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
+- Zmarli: rocznice śmierci LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
 - Żyjący: urodziny tylko jeśli ciekawa historia
 - Minimum 4 tematy z każdej kategorii
 - Dzień: liczba całkowita 1–${days}
-- Tytuł po polsku, max 8 słów
-- Subtitle: 1-2 zdania po polsku — konkretny dramat/paradoks/zaskoczenie, nie suchy fakt
+
+JĘZYK: Wszystko po polsku. Tytuł max 8 słów. Subtitle: 1-2 zdania — konkretny dramat lub paradoks, nie suchy fakt.
 
 Kategorie: urodziny, smierc, wydarzenie, polska, sport, polityka, wybory, katastrofa, nauka, kultura, ciekawostka
 
 Tylko JSON, zero tekstu poza JSON:
-{"events":[{"id":"slug","day":1,"title":"Tytuł","subtitle":"Dramat lub paradoks tej historii","category":"kategoria","anniversary":"np. 50 lat lub null"}]}`;
+{"events":[{"id":"slug","day":1,"title":"Tytuł po polsku","subtitle":"Opis po polsku","category":"kategoria","anniversary":"np. 50 lat lub null"}]}`;
 }
 
 // ─── FETCH EVENTS ─────────────────────────────────────────────────────────────
@@ -199,11 +200,26 @@ export default function App() {
           </span>
           <NavBtn onClick={()=>nav(1)}>›</NavBtn>
           <div style={{ width:1, height:22, background:"#E5E3DE", margin:"0 2px" }}/>
-          <NavBtn onClick={()=>loadMonth(true)} disabled={loading} title="Regeneruj miesiąc">↻</NavBtn>
+          <NavBtn onClick={()=>loadMonth(true)} disabled={loading} title="Regeneruj ten miesiąc">↻</NavBtn>
           <NavBtn onClick={()=>setView(v=>v==="calendar"?"list":"calendar")}
             style={{ fontFamily:"monospace", fontSize:12 }}>
             {view==="calendar"?"≡":"▦"}
           </NavBtn>
+          <div style={{ width:1, height:22, background:"#E5E3DE", margin:"0 2px" }}/>
+          <button
+            title="Wyczyść wszystkie zapisane dane"
+            onClick={()=>{
+              if(window.confirm("Wyczyścić cały cache? Wszystkie miesiące zostaną wygenerowane od nowa.")) {
+                localStorage.clear();
+                window.location.reload();
+              }
+            }}
+            style={{ background:"transparent", border:"1px solid #E5E3DE",
+              color:"#BBB", padding:"0 8px", height:30, borderRadius:3,
+              cursor:"pointer", fontSize:9, fontFamily:"monospace",
+              letterSpacing:".05em", whiteSpace:"nowrap" }}>
+            WYCZYŚĆ CACHE
+          </button>
         </div>
       </header>
 
