@@ -29,7 +29,7 @@ const stor = {
 
 function extractJSON(raw) {
   if (!raw) throw new Error("Pusta odpowiedź");
-  let s = raw.replace(/`{3}json/gi, "").replace(/`{3}/g, "").trim();
+  let s = raw.replace(/^```json\s*/i, "").replace(/^```\s*/m, "").replace(/```\s*$/m, "").trim();
 
   try { return JSON.parse(s); } catch {}
 
@@ -84,18 +84,26 @@ async function callClaude(userMessage) {
 // ─── PROMPT ──────────────────────────────────────────────────────────────────
 
 function buildPrompt(monthPL, year, days) {
-  return `Wygeneruj 50-60 tematów na ${monthPL} ${year} dla portalu zero.pl (narracyjne artykuły z dramatem, paradoksem, zaskoczeniem).
+  return `Wygeneruj 80-90 rocznic i wydarzeń na ${monthPL} ${year}.
 
-ZASADY DAT — KRYTYCZNE: Wstawiaj TYLKO daty co do których jesteś pewny. Jeśli nie znasz dokładnego dnia — pomiń temat. Nie zgaduj.
+ZASADY DAT — KRYTYCZNE: Tylko daty co do których jesteś pewny. Jeśli nie znasz dokładnego dnia — pomiń. Nie zgaduj.
 
 ZASADY:
-- Zmarli: rocznice śmierci LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
-- Żyjący: urodziny jeśli ciekawa historia (min. 40 lat)
-- Min. 4 tematy z każdej kategorii, dzień: 1–${days}
+- Tytuł to SUCHY FAKT, nie temat artykułu. Przykłady:
+  "48. urodziny Meryl Streep"
+  "17. rocznica premiery Ojca Chrzestnego"
+  "100. rocznica śmierci Lenina"
+  "Finał NBA 2026"
+  "25 lat od katastrofy Concorde"
+- Subtitle: jedno zdanie — kim jest ta osoba lub czym było to wydarzenie. Bez dramatyzowania.
+- Zmarli: rocznice śmierci (dowolne, szczególnie okrągłe) LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
+- Żyjący: urodziny jeśli znana postać (min. 40 lat)
+- Min. 5 tematów z każdej kategorii, dzień: 1–${days}
 - Kategorie: urodziny, smierc, wydarzenie, polska, sport, polityka, wybory, katastrofa, nauka, kultura, ciekawostka
+- Szeroki zakres: politycy, sportowcy, aktorzy, muzycy, pisarze, naukowcy, wynalazcy, przestępcy, ofiary, odkrycia, premiery filmów i albumów, rekordy, pierwsze razy w historii
 
 Format JSON:
-{"events":[{"id":"slug","day":1,"title":"Tytuł po polsku max 8 słów","subtitle":"1-2 zdania po polsku — dramat lub paradoks","category":"kategoria","anniversary":"50 lat lub null"}]}`;
+{"events":[{"id":"slug","day":1,"title":"Tytuł — suchy fakt","subtitle":"Kim jest lub czym było","category":"kategoria","anniversary":"50 lat lub null"}]}`;
 }
 
 // ─── FETCH ────────────────────────────────────────────────────────────────────
@@ -194,12 +202,12 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#F8F7F4", color: "#1A1A1A",
-      fontFamily: "Georgia,'Times New Roman',serif" }}
+      fontFamily: "Georgia,'Times New Roman',serif", maxWidth: 1200, margin: "0 auto" }}
       onClick={() => setTooltip(null)}>
 
       {/* HEADER */}
       <header style={{ background: "#fff", borderBottom: "1.5px solid #E5E3DE",
-        padding: "13px 22px 11px", display: "flex", alignItems: "center",
+        padding: "11px 16px 10px", display: "flex", alignItems: "center",
         justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
@@ -242,7 +250,7 @@ export default function App() {
       </header>
 
       {/* FILTERS */}
-      <div style={{ background: "#fff", padding: "7px 22px 9px", borderBottom: "1px solid #EDEDEA",
+      <div style={{ background: "#fff", padding: "6px 16px 8px", borderBottom: "1px solid #EDEDEA",
         display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 9, color: "#CCC", fontFamily: "monospace",
           letterSpacing: ".1em", marginRight: 3 }}>FILTR</span>
@@ -273,7 +281,7 @@ export default function App() {
 
       {/* ERROR */}
       {!loading && loadErr && (
-        <div style={{ padding: "24px 22px", fontFamily: "monospace", fontSize: 12, color: "#DC2626" }}>
+        <div style={{ padding: "16px 16px", fontFamily: "monospace", fontSize: 12, color: "#DC2626" }}>
           {loadErr}
           <button onClick={() => loadMonth(true)} style={{ marginLeft: 12,
             background: "transparent", border: "1px solid #DC2626", color: "#DC2626",
@@ -320,7 +328,7 @@ export default function App() {
 
       {/* LIST */}
       {!loading && !loadErr && view === "list" && (
-        <div style={{ padding: "14px 22px", maxWidth: 860 }}>
+        <div style={{ padding: "12px 16px", maxWidth: "100%" }}>
           {!sorted.length && <p style={{ color: "#CCC", fontFamily: "monospace", fontSize: 12, padding: "30px 0" }}>
             Brak tematów dla wybranych filtrów.</p>}
           {sorted.map(ev => <Row key={ev.id} ev={ev} />)}
