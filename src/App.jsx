@@ -1,6 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
-
-// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const CATEGORIES = {
   urodziny:    { label: "Urodziny",          color: "#2563EB", bg: "#EFF6FF" },
@@ -15,40 +13,30 @@ const CATEGORIES = {
   kultura:     { label: "Kultura / Film",    color: "#C2410C", bg: "#FFF7ED" },
   ciekawostka: { label: "Ciekawostka",       color: "#6D28D9", bg: "#F5F3FF" },
 };
-
+const CAT_KEYS  = Object.keys(CATEGORIES);
 const MONTHS_PL = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec",
                    "Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
-const MONTHS_EN = ["January","February","March","April","May","June",
-                   "July","August","September","October","November","December"];
 const DAYS_PL   = ["Pn","Wt","Śr","Cz","Pt","Sb","Nd"];
-const LANG_FLAGS = { en:"🇬🇧", fr:"🇫🇷", de:"🇩🇪", pl:"🇵🇱", es:"🇪🇸", it:"🇮🇹" };
-const CAT_KEYS  = Object.keys(CATEGORIES);
 
-// ─── LOCAL STORAGE (replaces window.storage from claude.ai) ──────────────────
+// ─── STORAGE ─────────────────────────────────────────────────────────────────
 
 const stor = {
   get(k)    { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-// ─── ROBUST JSON EXTRACTOR ───────────────────────────────────────────────────
+// ─── JSON EXTRACTOR ───────────────────────────────────────────────────────────
 
 function extractJSON(raw) {
-  if (!raw || typeof raw !== "string") throw new Error("Empty response");
+  if (!raw) throw new Error("Pusta odpowiedź");
   let s = raw.replace(/```json\s*/gi,"").replace(/```\s*/g,"").trim();
   try { return JSON.parse(s); } catch {}
-  const start = s.indexOf("{"), end = s.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(s.slice(start, end + 1)); } catch {}
-  }
-  const aStart = s.indexOf("["), aEnd = s.lastIndexOf("]");
-  if (aStart !== -1 && aEnd > aStart) {
-    try { return JSON.parse(s.slice(aStart, aEnd + 1)); } catch {}
-  }
-  throw new Error("Could not parse JSON from response");
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b+1)); } catch {} }
+  throw new Error("Nie udało się sparsować JSON");
 }
 
-// ─── API (calls /api/claude proxy) ───────────────────────────────────────────
+// ─── API ─────────────────────────────────────────────────────────────────────
 
 async function callClaude(messages, opts = {}) {
   const res = await fetch("/api/claude", {
@@ -58,120 +46,66 @@ async function callClaude(messages, opts = {}) {
       model: "claude-sonnet-4-6",
       max_tokens: opts.max_tokens || 8000,
       messages,
-      ...(opts.tools ? { tools: opts.tools, tool_choice: { type: "auto" } } : {}),
     }),
   });
+  const data = await res.json();
   if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    const msg = errData?.error || errData?.anthropic_type || `HTTP ${res.status}`;
+    const msg = data?.error || data?.anthropic_type || `HTTP ${res.status}`;
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
-  const data = await res.json();
   if (data.error) throw new Error(data.error.message || "API error");
-  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
-  return { text, raw: data };
+  return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
 }
 
-// ─── PROMPTS ─────────────────────────────────────────────────────────────────
+// ─── PROMPT ───────────────────────────────────────────────────────────────────
 
-function eventsPrompt(monthPL, monthEN, year, days) {
-  return `You are an editorial assistant helping a journalist find story hooks for ${monthPL} (${monthEN}) ${year}.
+function buildPrompt(monthPL, year, days) {
+  return `Jesteś redaktorem portalu zero.pl, który szuka tematów do angażujących artykułów narracyjnych. Styl portalu: głębokie, wciągające teksty o ludziach i zdarzeniach — dramat, paradoks, zaskoczenie, historia z puentą.
 
-Generate a list of exactly 60 diverse events for this month. Return ONLY a JSON object — no preamble, no explanation, no markdown fences.
+Wygeneruj 60-70 tematów na ${monthPL} ${year}, które mają POTENCJAŁ NA DOBRY ARTYKUŁ dla takiego portalu.
 
-RULES:
-- Dead people: use DEATH anniversaries freely; use BIRTH anniversaries ONLY for round numbers (50, 75, 100, 125, 150, 200 years). Never "83 years since birth of Lennon" — instead "45th death anniversary of Lennon".
-- Living people: any interesting birthday (min age 40).
-- Cover ALL 11 categories, minimum 4 events each.
-- Day must be an integer between 1 and ${days}.
+SELEKCJA — bierz tylko tematy gdzie jest:
+- dramat, paradoks lub nieoczywista historia
+- coś czego czytelnik nie wiedział
+- postać lub zdarzenie które rezonuje emocjonalnie
+- aktualny pretekst (rocznica, event) do opowiedzenia historii
 
-CATEGORIES:
-urodziny - birthdays of living icons OR round birth anniversaries of historical figures (politicians, athletes, actors, musicians, scientists, inventors, writers)
-smierc - death anniversaries (musicians, actors, scientists, politicians, criminals, victims)
-wydarzenie - historic events (wars, treaties, revolutions, assassinations, discoveries, moon landing, Berlin Wall)
-polska - Polish history (Solidarity, WWII, uprisings, sports milestones, cultural achievements, famous Poles)
-sport - scheduled ${year} events (league finals, Grand Slams, World Championships, F1, Olympics) PLUS legendary sports moments anniversaries (famous goals, records, retirements, transfers)
-polityka - scheduled ${year} summits (G7, G20, NATO, EU, UN, COP, APEC) PLUS historic summit anniversaries
-wybory - presidential or parliamentary elections scheduled in ${year} worldwide — be specific about which country
-katastrofa - aviation disasters (Smolensk, Tenerife, Lockerbie, TWA800, Concorde, 9/11), maritime (Titanic, Estonia, Costa Concordia), industrial (Chernobyl, Bhopal, Texas City), earthquakes, floods
-nauka - science & tech milestones: DNA, penicillin, Moon landing, Internet, HIV, COVID-19, ChatGPT, first iPhone, Dolly the sheep, Hubble telescope
-kultura - round anniversaries of iconic films/albums/TV shows/books/musicals; Oscar ceremonies; famous concert tours; legendary magazine covers
-ciekawostka - surprising "firsts": first woman on Everest, first Bitcoin transaction, first selfie from space, Guinness records, Michael Jordan retirement, O.J. Simpson verdict, first Starbucks, first McDonald's in USSR
+ZASADY:
+- Zmarli: rocznice śmierci (dowolne) LUB urodziny TYLKO okrągłe (50,75,100,125,150 lat)
+- Żyjący: urodziny tylko jeśli ciekawa historia
+- Minimum 4 tematy z każdej kategorii
+- Dzień: liczba całkowita 1–${days}
+- Tytuł po polsku, max 8 słów
+- Subtitle: 1-2 zdania po polsku — konkretny dramat/paradoks/zaskoczenie, nie suchy fakt
 
-REQUIRED JSON STRUCTURE:
-{"events":[{"id":"slug","day":1,"title":"Short title max 8 words","subtitle":"1-2 sentences: what is dramatic, paradoxical or surprising","category":"category","anniversary":"e.g. 50 years or null","searchQuery":"English query for finding long-form journalism about this topic in NYT Atlantic Guardian"}]}`;
+Kategorie: urodziny, smierc, wydarzenie, polska, sport, polityka, wybory, katastrofa, nauka, kultura, ciekawostka
+
+Tylko JSON, zero tekstu poza JSON:
+{"events":[{"id":"slug","day":1,"title":"Tytuł","subtitle":"Dramat lub paradoks tej historii","category":"kategoria","anniversary":"np. 50 lat lub null"}]}`;
 }
 
-const ideasPrompt = (ev, month, year) =>
-`Jesteś redaktorem Mr. Y — dziennikarza piszącego narracyjne artykuły: zaczyna od paradoksu → dramatyczne sceny → puenta z dystansem. 8-12 minut czytania.
-
-Temat: ${ev.title}
-Data: ${ev.day} ${MONTHS_PL[month-1]} ${year}
-Rocznica: ${ev.anniversary || "—"}
-Kontekst: ${ev.subtitle}
-
-Wygeneruj DOKŁADNIE 5 różnych pomysłów — każdy to inny kąt na ten sam temat.
-
-Dla każdego pomysłu:
-**[numer]. [TYTUŁ — z paradoksem lub zaskoczeniem]**
-*Lead:* dwa wciągające zdania
-*Kąt:* jedno zdanie — co jest unikalnego w tym podejściu
-
-Pisz po polsku.`;
-
-const articlesPrompt = (ev) =>
-`Search the web and find 6-8 high-quality long-form articles about: "${ev.searchQuery || ev.title}"
-
-I need RICH journalism — profiles, investigations, oral histories, retrospectives, deep dives — from: New York Times, The Atlantic, New Yorker, Guardian, BBC, Financial Times, Economist, Le Monde, ESPN, The Ringer, Rolling Stone, Vanity Fair, Washington Post, Der Spiegel, Time, Wired.
-
-NOT short news, Wikipedia, press releases, forums.
-
-After searching, respond with ONLY this JSON:
-{"articles":[{"title":"headline","publication":"outlet","url":"https://...","language":"en","description":"one sentence why useful","year":2020}]}`;
-
-// ─── DATA FETCHERS ───────────────────────────────────────────────────────────
+// ─── FETCH EVENTS ─────────────────────────────────────────────────────────────
 
 async function fetchEvents(year, month) {
   const days = new Date(year, month, 0).getDate();
-  const { text } = await callClaude(
-    [{ role:"user", content: eventsPrompt(MONTHS_PL[month-1], MONTHS_EN[month-1], year, days) }],
-    { max_tokens: 8000 }
+  const text = await callClaude(
+    [{ role:"user", content: buildPrompt(MONTHS_PL[month-1], year, days) }],
+    { max_tokens: 7000 }
   );
   const parsed = extractJSON(text);
   const evs = parsed.events || parsed;
-  if (!Array.isArray(evs) || !evs.length) throw new Error("Empty events array");
+  if (!Array.isArray(evs) || !evs.length) throw new Error("Pusta lista zdarzeń");
   const maxDay = new Date(year, month, 0).getDate();
   return evs
-    .filter(e => e && e.title && e.category && CAT_KEYS.includes(e.category))
+    .filter(e => e && e.title && CAT_KEYS.includes(e.category))
     .map((e, i) => ({
       id: e.id || `ev-${i}`,
       day: Math.min(Math.max(parseInt(e.day)||1, 1), maxDay),
-      title: String(e.title).slice(0,80),
-      subtitle: String(e.subtitle||"").slice(0,300),
+      title: String(e.title).slice(0, 80),
+      subtitle: String(e.subtitle||"").slice(0, 300),
       category: e.category,
       anniversary: e.anniversary || null,
-      searchQuery: e.searchQuery || e.title,
     }));
-}
-
-async function fetchIdeas(ev, month, year) {
-  const { text } = await callClaude(
-    [{ role:"user", content: ideasPrompt(ev, month, year) }],
-    { max_tokens: 2000 }
-  );
-  return text;
-}
-
-async function fetchArticles(ev) {
-  const { text } = await callClaude(
-    [{ role:"user", content: articlesPrompt(ev) }],
-    { max_tokens: 3000, tools: [{ type:"web_search_20250305", name:"web_search" }] }
-  );
-  if (!text || text.length < 30) throw new Error("No response");
-  const parsed = extractJSON(text);
-  const arts = parsed.articles || parsed;
-  if (!Array.isArray(arts)) throw new Error("Not an array");
-  return arts.filter(a => a.url && a.title);
 }
 
 // ─── APP ─────────────────────────────────────────────────────────────────────
@@ -185,8 +119,8 @@ export default function App() {
   const [loadMsg, setLoadMsg] = useState("");
   const [loadErr, setLoadErr] = useState("");
   const [filters, setFilters] = useState(new Set(CAT_KEYS));
-  const [selected,setSelected]= useState(null);
   const [view,    setView]    = useState("calendar");
+  const [tooltip, setTooltip] = useState(null); // {ev, x, y}
   const [meta,    setMeta]    = useState({});
 
   const ym = `${year}-${String(month).padStart(2,"0")}`;
@@ -199,7 +133,7 @@ export default function App() {
       if (stored?.length && !force) {
         setEvents(stored); setMeta(m); setLoading(false); return;
       }
-      setLoadMsg(`Generuję ${MONTHS_PL[month-1]} ${year}… (30–60 sek)`);
+      setLoadMsg(`Generuję ${MONTHS_PL[month-1]} ${year}…`);
       const evs = await fetchEvents(year, month);
       stor.set(`ev:${ym}`, evs);
       m[ym] = new Date().toISOString();
@@ -207,7 +141,7 @@ export default function App() {
       setMeta({...m}); setEvents(evs);
     } catch(e) {
       console.error(e);
-      setLoadErr(`Błąd: ${e.message} — kliknij ↻`);
+      setLoadErr(`Błąd: ${e.message}`);
     }
     setLoading(false);
   }, [ym, year, month]);
@@ -216,35 +150,46 @@ export default function App() {
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const startOffset = (new Date(year, month-1, 1).getDay()+6)%7;
+
   const byDay = {};
   events.filter(e=>filters.has(e.category)).forEach(e=>{
-    (byDay[e.day]=byDay[e.day]||[]).push(e);
+    (byDay[e.day] = byDay[e.day]||[]).push(e);
   });
+
   const nav = dir => {
-    let m=month+dir,y=year;
+    let m=month+dir, y=year;
     if(m>12){m=1;y++;} if(m<1){m=12;y--;}
-    setMonth(m);setYear(y);setSelected(null);
+    setMonth(m); setYear(y); setTooltip(null);
   };
+
   const toggleF = k => setFilters(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const sorted = events.filter(e=>filters.has(e.category)).sort((a,b)=>a.day-b.day);
+  const total  = events.filter(e=>filters.has(e.category)).length;
+
+  const showTooltip = (ev, e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setTooltip({ ev, x: rect.left, y: rect.bottom + 4 });
+  };
 
   return (
     <div style={{ minHeight:"100vh", background:"#F8F7F4", color:"#1A1A1A",
-      fontFamily:"Georgia,'Times New Roman',serif" }}>
+      fontFamily:"Georgia,'Times New Roman',serif" }}
+      onClick={()=>setTooltip(null)}>
 
+      {/* HEADER */}
       <header style={{ background:"#fff", borderBottom:"1.5px solid #E5E3DE",
-        padding:"14px 22px 12px", display:"flex", alignItems:"center",
+        padding:"13px 22px 11px", display:"flex", alignItems:"center",
         justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
         <div>
           <div style={{ display:"flex", alignItems:"baseline", gap:9 }}>
             <span style={{ fontSize:10, letterSpacing:".2em", textTransform:"uppercase",
-              color:"#DC2626", fontFamily:"monospace", fontWeight:700 }}>Mr. Y</span>
+              color:"#DC2626", fontFamily:"monospace", fontWeight:700 }}>zero.pl</span>
             <h1 style={{ fontSize:19, fontWeight:700, letterSpacing:"-.02em", margin:0, color:"#111" }}>
               Planer Tematów
             </h1>
           </div>
           <p style={{ fontSize:10, color:"#AAA", margin:"2px 0 0", fontFamily:"monospace" }}>
-            {meta[ym] ? `${events.length} zdarzeń · ` : ""}{MONTHS_PL[month-1]} {year}
+            {meta[ym] ? `${total} tematów` : "brak danych"} · {MONTHS_PL[month-1]} {year}
           </p>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -262,39 +207,48 @@ export default function App() {
         </div>
       </header>
 
-      <div style={{ background:"#fff", padding:"7px 22px 9px", borderBottom:"1px solid #EDEDEA",
-        display:"flex", gap:4, flexWrap:"wrap", alignItems:"center" }}>
+      {/* FILTERS */}
+      <div style={{ background:"#fff", padding:"7px 22px 9px",
+        borderBottom:"1px solid #EDEDEA", display:"flex", gap:4, flexWrap:"wrap", alignItems:"center" }}>
         <span style={{ fontSize:9, color:"#CCC", fontFamily:"monospace", letterSpacing:".1em", marginRight:3 }}>FILTR</span>
         {CAT_KEYS.map(k=>{
-          const c=CATEGORIES[k]; const on=filters.has(k);
+          const c=CATEGORIES[k], on=filters.has(k);
+          const cnt = events.filter(e=>e.category===k).length;
           return (
-            <button key={k} onClick={()=>toggleF(k)} style={{
+            <button key={k} onClick={e=>{e.stopPropagation();toggleF(k);}} style={{
               background:on?c.bg:"transparent",
               border:`1px solid ${on?c.color+"55":"#E5E3DE"}`,
               borderRadius:3, color:on?c.color:"#CCC",
               padding:"2px 7px", fontSize:10, cursor:"pointer",
               fontFamily:"monospace", transition:"all .1s",
-            }}>{c.label}</button>
+            }}>
+              {c.label}{cnt>0 ? <span style={{ opacity:.6, marginLeft:3 }}>{cnt}</span> : null}
+            </button>
           );
         })}
-        <button onClick={()=>setFilters(new Set(CAT_KEYS))} style={{
+        <button onClick={e=>{e.stopPropagation();setFilters(new Set(CAT_KEYS));}} style={{
           marginLeft:"auto", background:"transparent", border:"1px solid #E5E3DE",
           color:"#CCC", padding:"2px 7px", fontSize:9, cursor:"pointer",
           fontFamily:"monospace", borderRadius:3,
         }}>Wszystkie</button>
       </div>
 
-      {loading && (
-        <div style={{ padding:"50px 22px", textAlign:"center",
-          fontFamily:"monospace", fontSize:12, color:"#999" }}>
-          <Spinner/><br/><br/>{loadMsg}
-        </div>
-      )}
+      {/* LOADING */}
+      {loading && <LoadingProgress msg={loadMsg} />}
+
+      {/* ERROR */}
       {!loading && loadErr && (
         <div style={{ padding:"24px 22px", textAlign:"center",
-          fontFamily:"monospace", fontSize:12, color:"#DC2626" }}>{loadErr}</div>
+          fontFamily:"monospace", fontSize:12, color:"#DC2626" }}>
+          {loadErr}
+          <button onClick={()=>loadMonth(true)} style={{ marginLeft:12,
+            background:"transparent", border:"1px solid #DC2626", color:"#DC2626",
+            padding:"3px 10px", borderRadius:3, cursor:"pointer",
+            fontFamily:"monospace", fontSize:11 }}>↻ Spróbuj ponownie</button>
+        </div>
       )}
 
+      {/* CALENDAR */}
       {!loading && !loadErr && view==="calendar" && (
         <div style={{ padding:"14px 22px" }}>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2, marginBottom:3 }}>
@@ -304,23 +258,24 @@ export default function App() {
             ))}
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
-            {Array.from({length:startOffset}).map((_,i)=><div key={`x${i}`} style={{ minHeight:88 }}/>)}
+            {Array.from({length:startOffset}).map((_,i)=><div key={`x${i}`} style={{ minHeight:90 }}/>)}
             {Array.from({length:daysInMonth}).map((_,i)=>{
               const day=i+1, evs=byDay[day]||[];
               const isToday=day===today.getDate()&&month===today.getMonth()+1&&year===today.getFullYear();
               return (
-                <div key={day} style={{ minHeight:88,
-                  background:isToday?"#FFFBEB":"#fff",
+                <div key={day} onClick={e=>e.stopPropagation()} style={{
+                  minHeight:90, background:isToday?"#FFFBEB":"#fff",
                   border:`1px solid ${isToday?"#FCD34D":"#EDEDEA"}`,
                   borderRadius:3, padding:"5px 5px" }}>
                   <div style={{ fontSize:10, fontFamily:"monospace", marginBottom:3,
                     color:isToday?"#D97706":"#CCC", fontWeight:isToday?700:400 }}>{day}</div>
-                  {evs.slice(0,3).map(ev=><EventChip key={ev.id} ev={ev} onClick={()=>setSelected(ev)}/>)}
-                  {evs.length>3 && (
-                    <div onClick={()=>setSelected(evs[3])} style={{ fontSize:9,
-                      color:"#CCC", fontFamily:"monospace", cursor:"pointer", paddingLeft:3 }}>
-                      +{evs.length-3}
-                    </div>
+                  {evs.slice(0,4).map(ev=>(
+                    <Chip key={ev.id} ev={ev}
+                      onClick={e=>{ e.stopPropagation(); showTooltip(ev,e); }}/>
+                  ))}
+                  {evs.length>4 && (
+                    <div style={{ fontSize:9, color:"#CCC", fontFamily:"monospace",
+                      paddingLeft:3, cursor:"default" }}>+{evs.length-4}</div>
                   )}
                 </div>
               );
@@ -329,35 +284,44 @@ export default function App() {
         </div>
       )}
 
+      {/* LIST */}
       {!loading && !loadErr && view==="list" && (
         <div style={{ padding:"14px 22px", maxWidth:860 }}>
-          {!sorted.length && <p style={{ color:"#CCC", fontFamily:"monospace", fontSize:12, padding:"30px 0" }}>Brak zdarzeń.</p>}
-          {sorted.map(ev=><EventRow key={ev.id} ev={ev} onClick={()=>setSelected(ev)}/>)}
+          {!sorted.length && <p style={{ color:"#CCC", fontFamily:"monospace",
+            fontSize:12, padding:"30px 0" }}>Brak tematów dla wybranych filtrów.</p>}
+          {sorted.map(ev=><Row key={ev.id} ev={ev}/>)}
         </div>
       )}
 
-      {selected && <DetailPanel ev={selected} month={month} year={year} onClose={()=>setSelected(null)}/>}
+      {/* TOOLTIP */}
+      {tooltip && <Tooltip data={tooltip} onClose={()=>setTooltip(null)}/>}
     </div>
   );
 }
 
-function EventChip({ev,onClick}) {
-  const c=CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
+// ─── CHIP ─────────────────────────────────────────────────────────────────────
+
+function Chip({ev, onClick}) {
+  const c = CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
   return (
     <div onClick={onClick} title={ev.title} style={{
       background:c.bg, borderLeft:`2px solid ${c.color}`,
-      padding:"1px 3px", fontSize:9, color:c.color, borderRadius:"0 2px 2px 0",
-      whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis",
-      cursor:"pointer", fontFamily:"monospace", lineHeight:1.45, marginBottom:2,
+      padding:"1px 4px", fontSize:9, color:c.color,
+      borderRadius:"0 2px 2px 0", whiteSpace:"nowrap",
+      overflow:"hidden", textOverflow:"ellipsis",
+      cursor:"pointer", fontFamily:"monospace",
+      lineHeight:1.45, marginBottom:2,
     }}>{ev.title}</div>
   );
 }
 
-function EventRow({ev,onClick}) {
-  const c=CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
+// ─── ROW (list view) ──────────────────────────────────────────────────────────
+
+function Row({ev}) {
+  const c = CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
   return (
-    <div onClick={onClick} style={{ display:"flex", gap:12, padding:"10px 0",
-      borderBottom:"1px solid #F0EEEB", cursor:"pointer", alignItems:"flex-start" }}>
+    <div style={{ display:"flex", gap:12, padding:"10px 0",
+      borderBottom:"1px solid #F0EEEB", alignItems:"flex-start" }}>
       <div style={{ minWidth:28, fontSize:17, fontWeight:700, color:"#DDD",
         fontFamily:"monospace", textAlign:"right", paddingTop:1 }}>{ev.day}</div>
       <div style={{ width:3, alignSelf:"stretch", background:c.color,
@@ -370,187 +334,124 @@ function EventRow({ev,onClick}) {
               background:c.bg, border:`1px solid ${c.color}44`,
               padding:"1px 5px", borderRadius:2 }}>{ev.anniversary}</span>
           )}
+          <span style={{ fontSize:9, fontFamily:"monospace", color:c.color+"99" }}>{c.label}</span>
         </div>
-        <div style={{ fontSize:11, color:"#888", marginTop:2, lineHeight:1.45 }}>{ev.subtitle}</div>
-      </div>
-      <div style={{ fontSize:9, fontFamily:"monospace", color:c.color+"99", flexShrink:0, paddingTop:2 }}>
-        {c.label}
+        <div style={{ fontSize:11, color:"#777", marginTop:2, lineHeight:1.5 }}>{ev.subtitle}</div>
       </div>
     </div>
   );
 }
 
-function DetailPanel({ev,month,year,onClose}) {
-  const c=CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
-  const [tab, setTab]     = useState("ideas");
-  const [ideas,setIdeas]  = useState("");
-  const [iLoad,setILoad]  = useState(false);
-  const [arts, setArts]   = useState(null);
-  const [aLoad,setALoad]  = useState(false);
-  const [aErr, setAErr]   = useState("");
+// ─── TOOLTIP ─────────────────────────────────────────────────────────────────
+
+function Tooltip({data, onClose}) {
+  const {ev, x, y} = data;
+  const c = CATEGORIES[ev.category]||CATEGORIES.wydarzenie;
+  const ref = useRef(null);
 
   useEffect(()=>{
-    setIdeas(""); setILoad(true);
-    fetchIdeas(ev,month,year)
-      .then(setIdeas).catch(e=>setIdeas("Błąd: "+e.message))
-      .finally(()=>setILoad(false));
-  },[ev.id]);
+    if(!ref.current) return;
+    const box = ref.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    if(box.right > vw-8) {
+      ref.current.style.left = Math.max(8, vw - box.width - 8) + "px";
+    }
+  },[]);
 
-  const searchArticles=async()=>{
-    setALoad(true);setAErr("");setArts(null);
-    try { const a=await fetchArticles(ev); if(!a.length) setAErr("Brak wyników."); else setArts(a); }
-    catch(e){ setAErr("Błąd: "+e.message); }
-    setALoad(false);
-  };
-
-  const W=Math.min(500,window.innerWidth);
   return (
-    <div style={{ position:"fixed",top:0,right:0,bottom:0,width:W,
-      background:"#fff",borderLeft:"1.5px solid #E5E3DE",
-      display:"flex",flexDirection:"column",zIndex:200,
-      boxShadow:"-12px 0 48px #0000001A" }}>
-
-      <div style={{ padding:"13px 16px",borderBottom:"1px solid #EDEDEA",
-        display:"flex",justifyContent:"space-between",alignItems:"flex-start" }}>
-        <div style={{ flex:1,minWidth:0 }}>
-          <div style={{ fontSize:9,fontFamily:"monospace",color:c.color,
-            letterSpacing:".1em",marginBottom:3 }}>
-            {c.label.toUpperCase()} · {ev.day} {MONTHS_PL[month-1].toUpperCase()} {year}
-          </div>
-          <div style={{ fontSize:15,fontWeight:700,lineHeight:1.3,color:"#111" }}>{ev.title}</div>
-          {ev.anniversary && (
-            <span style={{ display:"inline-block",marginTop:4,fontSize:9,
-              fontFamily:"monospace",color:c.color,background:c.bg,
-              border:`1px solid ${c.color}44`,padding:"1px 6px",borderRadius:2 }}>
-              {ev.anniversary}
-            </span>
-          )}
-        </div>
-        <button onClick={onClose} style={{ background:"none",border:"none",
-          color:"#CCC",fontSize:20,cursor:"pointer",padding:"0 2px",lineHeight:1 }}>×</button>
+    <div ref={ref} onClick={e=>e.stopPropagation()} style={{
+      position:"fixed", left:x, top:y, zIndex:300,
+      background:"#fff", border:`1.5px solid ${c.color}55`,
+      borderRadius:6, padding:"11px 14px", maxWidth:300,
+      boxShadow:"0 4px 24px #00000018", fontFamily:"Georgia,serif",
+    }}>
+      <div style={{ fontSize:9, fontFamily:"monospace", color:c.color,
+        letterSpacing:".1em", marginBottom:4 }}>
+        {c.label.toUpperCase()}{ev.anniversary ? ` · ${ev.anniversary}` : ""}
       </div>
-
-      <div style={{ padding:"9px 16px",background:"#FAFAF8",borderBottom:"1px solid #F0EEEB" }}>
-        <p style={{ fontSize:12,color:"#666",lineHeight:1.6,margin:0 }}>{ev.subtitle}</p>
-      </div>
-
-      <div style={{ display:"flex",borderBottom:"1.5px solid #EDEDEA" }}>
-        {[["ideas","✦ 5 pomysłów"],["links","⌕ Artykuły"]].map(([k,lbl])=>(
-          <button key={k} onClick={()=>setTab(k)} style={{
-            flex:1,padding:"8px 0",background:"none",border:"none",
-            borderBottom:`2px solid ${tab===k?c.color:"transparent"}`,
-            color:tab===k?c.color:"#AAA",fontSize:10,cursor:"pointer",
-            fontFamily:"monospace",letterSpacing:".04em",marginBottom:"-1.5px",
-          }}>{lbl}</button>
-        ))}
-      </div>
-
-      <div style={{ flex:1,overflowY:"auto",padding:"14px 16px" }}>
-        {tab==="ideas" && <>
-          {iLoad && <Center><Spinner/><br/>Generuję 5 pomysłów…</Center>}
-          {!iLoad && ideas && (
-            <>
-              <SLabel>5 POMYSŁÓW NA ARTYKUŁ</SLabel>
-              <div style={{ fontSize:12.5,lineHeight:1.75,color:"#333",whiteSpace:"pre-wrap" }}>{ideas}</div>
-              <SBtn onClick={()=>{ setIdeas("");setILoad(true);
-                fetchIdeas(ev,month,year).then(setIdeas).catch(e=>setIdeas("Błąd: "+e.message)).finally(()=>setILoad(false));
-              }} style={{ marginTop:12 }}>↻ Inne pomysły</SBtn>
-            </>
-          )}
-        </>}
-
-        {tab==="links" && <>
-          {aLoad && <Center><Spinner/><br/>Przeszukuję internet…<br/>
-            <small style={{ color:"#CCC" }}>(15–30 sekund)</small></Center>}
-          {!aLoad && aErr && <><p style={{ color:"#DC2626",fontSize:12,fontFamily:"monospace" }}>{aErr}</p>
-            <SBtn onClick={searchArticles}>↻ Spróbuj ponownie</SBtn></>}
-          {!aLoad && !aErr && arts===null && <>
-            <p style={{ fontSize:12,color:"#888",lineHeight:1.6,marginBottom:12 }}>
-              AI przeszuka internet i znajdzie długie, bogate artykuły z NYT, Atlantic,
-              Guardian, Le Monde, ESPN i innych dużych mediów.
-            </p>
-            <ABtn color={c.color} bg={c.bg} onClick={searchArticles}>⌕ Szukaj artykułów</ABtn>
-          </>}
-          {!aLoad && arts && <>
-            <SLabel>{arts.length} ARTYKUŁÓW</SLabel>
-            {arts.map((a,i)=><ArtCard key={i} a={a}/>)}
-            <SBtn onClick={searchArticles} style={{ marginTop:10 }}>↻ Szukaj ponownie</SBtn>
-          </>}
-        </>}
-      </div>
+      <div style={{ fontSize:14, fontWeight:700, color:"#111",
+        lineHeight:1.3, marginBottom:6 }}>{ev.title}</div>
+      <div style={{ fontSize:12, color:"#666", lineHeight:1.55 }}>{ev.subtitle}</div>
+      <button onClick={onClose} style={{ position:"absolute", top:6, right:8,
+        background:"none", border:"none", color:"#CCC",
+        fontSize:16, cursor:"pointer", lineHeight:1 }}>×</button>
     </div>
   );
 }
 
-function ArtCard({a}) {
+// ─── LOADING PROGRESS ─────────────────────────────────────────────────────────
+
+function LoadingProgress({ msg }) {
+  const TOTAL = 90;
+  const STEPS = [
+    { at:  0, text: "Łączę się z AI…" },
+    { at:  5, text: "Analizuję miesiąc i rok…" },
+    { at: 15, text: "Szukam rocznic i wydarzeń…" },
+    { at: 28, text: "Oceniam potencjał tematów…" },
+    { at: 42, text: "Dobieram sport, politykę, katastrofy…" },
+    { at: 55, text: "Filtruję pod kątem zero.pl…" },
+    { at: 68, text: "Składam listę tematów…" },
+    { at: 80, text: "Weryfikuję daty…" },
+    { at: 88, text: "Już prawie…" },
+  ];
+  const [elapsed, setElapsed] = useState(0);
+  const start = useRef(Date.now());
+  useEffect(()=>{
+    const t = setInterval(()=>setElapsed(Math.floor((Date.now()-start.current)/1000)),500);
+    return ()=>clearInterval(t);
+  },[]);
+  const pct = Math.min(95, Math.round(100*(1-Math.exp(-3.5*elapsed/TOTAL))));
+  const step = [...STEPS].reverse().find(s=>elapsed>=s.at)?.text || STEPS[0].text;
+  const mins = Math.floor(elapsed/60), secs = elapsed%60;
+  const time = mins>0 ? `${mins}:${String(secs).padStart(2,"0")} min` : `${secs} sek`;
   return (
-    <a href={a.url} target="_blank" rel="noopener noreferrer" style={{
-      display:"block",textDecoration:"none",marginBottom:7,
-      background:"#FAFAF8",border:"1px solid #EDEDEA",borderRadius:4,padding:"9px 11px",
-    }}
-    onMouseEnter={e=>e.currentTarget.style.borderColor="#CCC"}
-    onMouseLeave={e=>e.currentTarget.style.borderColor="#EDEDEA"}>
-      <div style={{ display:"flex",justifyContent:"space-between",gap:6 }}>
-        <div style={{ flex:1,minWidth:0 }}>
-          <div style={{ fontSize:12,fontWeight:600,color:"#111",lineHeight:1.3,marginBottom:3,
-            overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",
-            WebkitLineClamp:2,WebkitBoxOrient:"vertical" }}>{a.title}</div>
-          <div style={{ display:"flex",gap:5,alignItems:"center",flexWrap:"wrap" }}>
-            <span style={{ fontSize:10,fontFamily:"monospace",color:"#16A34A",
-              background:"#F0FDF4",border:"1px solid #86EFAC66",
-              padding:"1px 5px",borderRadius:2 }}>{a.publication}</span>
-            {a.year && <span style={{ fontSize:9,color:"#CCC",fontFamily:"monospace" }}>{a.year}</span>}
-            <span style={{ fontSize:11 }}>{LANG_FLAGS[a.language]||"🌐"}</span>
-          </div>
-          {a.description && (
-            <div style={{ fontSize:10.5,color:"#888",marginTop:3,lineHeight:1.4 }}>{a.description}</div>
-          )}
+    <div style={{ padding:"50px 22px 30px", maxWidth:460, margin:"0 auto" }}>
+      <div style={{ display:"flex", justifyContent:"space-between",
+        alignItems:"baseline", marginBottom:9 }}>
+        <div style={{ fontSize:11, fontFamily:"monospace", color:"#555", fontWeight:600 }}>
+          Generowanie tematów
         </div>
-        <span style={{ color:"#CCC",fontSize:13,flexShrink:0 }}>↗</span>
+        <div style={{ fontSize:10, fontFamily:"monospace", color:"#AAA" }}>{time}</div>
       </div>
-    </a>
+      <div style={{ height:5, background:"#EDEDEA", borderRadius:3,
+        overflow:"hidden", marginBottom:11 }}>
+        <div style={{ height:"100%", width:`${pct}%`,
+          background:"linear-gradient(90deg,#2563EB,#7C3AED)",
+          borderRadius:3, transition:"width .5s ease" }}/>
+      </div>
+      <div style={{ display:"flex", justifyContent:"space-between" }}>
+        <div style={{ fontSize:10, fontFamily:"monospace", color:"#999" }}>
+          <Spinner/> {step}
+        </div>
+        <div style={{ fontSize:11, fontFamily:"monospace",
+          color:"#2563EB", fontWeight:600 }}>{pct}%</div>
+      </div>
+      {elapsed>80 && (
+        <div style={{ marginTop:16, fontSize:10, fontFamily:"monospace",
+          color:"#CCC", textAlign:"center", lineHeight:1.6 }}>
+          API jest teraz wolne — poczekaj lub kliknij ↻
+        </div>
+      )}
+    </div>
   );
 }
+
+// ─── MICRO ────────────────────────────────────────────────────────────────────
 
 function NavBtn({children,onClick,disabled,title,style={}}) {
   return (
     <button onClick={onClick} disabled={disabled} title={title} style={{
-      background:"#fff",border:"1px solid #E5E3DE",color:"#777",
-      width:30,height:30,borderRadius:3,cursor:disabled?"default":"pointer",
-      fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",
-      opacity:disabled?0.4:1,...style,
+      background:"#fff", border:"1px solid #E5E3DE", color:"#777",
+      width:30, height:30, borderRadius:3, cursor:disabled?"default":"pointer",
+      fontSize:16, display:"flex", alignItems:"center", justifyContent:"center",
+      opacity:disabled?0.4:1, ...style,
     }}>{children}</button>
   );
 }
-function ABtn({children,onClick,color,bg}) {
-  return (
-    <button onClick={onClick} style={{
-      background:bg,border:`1px solid ${color}55`,color,padding:"9px 14px",
-      borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"monospace",
-      letterSpacing:".04em",width:"100%",
-    }}>{children}</button>
-  );
-}
-function SBtn({children,onClick,style={}}) {
-  return (
-    <button onClick={onClick} style={{
-      background:"transparent",border:"1px solid #E5E3DE",color:"#AAA",
-      padding:"5px 11px",borderRadius:3,cursor:"pointer",fontSize:10,fontFamily:"monospace",...style,
-    }}>{children}</button>
-  );
-}
-function SLabel({children}) {
-  return <div style={{ fontSize:9,fontFamily:"monospace",color:"#CCC",
-    letterSpacing:".1em",marginBottom:8,paddingBottom:5,
-    borderBottom:"1px solid #F0EEEB" }}>{children}</div>;
-}
-function Center({children}) {
-  return <div style={{ textAlign:"center",padding:"24px 0",color:"#AAA",
-    fontFamily:"monospace",fontSize:11,lineHeight:1.7 }}>{children}</div>;
-}
+
 function Spinner() {
   const [f,setF]=useState(0);
   const fr=["◐","◓","◑","◒"];
-  useEffect(()=>{ const t=setInterval(()=>setF(x=>(x+1)%4),150); return()=>clearInterval(t); },[]);
+  useEffect(()=>{const t=setInterval(()=>setF(x=>(x+1)%4),150);return()=>clearInterval(t);},[]);
   return <span style={{ fontFamily:"monospace" }}>{fr[f]}</span>;
 }
